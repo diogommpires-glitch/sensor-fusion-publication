@@ -1,0 +1,8 @@
+* text=auto eol=lf
+*.cmd text eol=crlf
+*.png binary
+*.pdf binary
+*.woff2 binary
+protocols/snapshots/**/*.json -text
+reports/** -text
+releases/v1/** -text

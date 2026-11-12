@@ -1,0 +1,14 @@
+title = "Sensor Fusion source snapshot"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "Synthetic export-test identifier encodes session, method, delay seconds and seed; no authentication use."
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^tests/test_study_export\.py$''']
+regexes = ['''^fixture-M2-delay-0\.05-0$''']

@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "dataset_id": "roboloc-g",
+  "dataset_version": "15989282",
+  "calibration_sessions": ["still", "zigzag1", "zigzag2"],
+  "validation_sessions": ["zigzag3", "zigzag4", "random1"],
+  "final_sessions": ["circle", "random2"],
+  "methods": ["M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8"],
+  "primary_comparison": ["M7", "M2"],
+  "primary_endpoint": "macro-average final-trajectory 3D position RMSE",
+  "radar_primary": "AOP",
+  "radar_substitutions": ["ISK0", "ISK1"],
+  "output_hz": 20.0,
+  "cv_q_candidates_m2_s3": [0.01, 0.1, 1.0, 10.0],
+  "acceleration_noise_multipliers": [0.5, 1.0, 2.0],
+  "bias_diffusion_candidates_m2_s5": [0.0, 0.000001, 0.0001],
+  "wls_window_candidates_s": [0.05, 0.1, 0.2, 0.5, 1.0],
+  "gate_probability": 0.999,
+  "fault_methods": ["M2", "M6", "M7"],
+  "fault_seeds": [0, 1, 2, 3, 4],
+  "fault_levels": {
+    "dropout": [0.5, 2.0, 5.0],
+    "range_bias": [0.25, 0.5, 1.0],
+    "delay": [0.05, 0.1, 0.25],
+    "imu_bias": [0.02, 0.05, 0.1],
+    "radar_shift": [0.25, 0.5, 1.0]
+  },
+  "reference_max_gap_s": 0.105,
+  "external": {
+    "dataset_id": "miluv",
+    "version": "28386041.v1",
+    "development": ["default_1_random3_0"],
+    "final": ["default_1_random3_2"],
+    "methods": ["M1", "M2"],
+    "target": "ifo001 physical tag 10",
+    "claim": "calibrated portability of range positioning only"
+  },
+  "prohibition": "No final-set tuning, automatic resets or synthetic substitutes for recorded-data evidence."
+}
