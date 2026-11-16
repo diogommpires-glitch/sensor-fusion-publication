@@ -742,6 +742,32 @@ def freeze_hardware(workspace: Path, study_id: str, calibration_id: str) -> dict
     calibration = read_json(
         _directory(workspace, "calibrations", calibration_id).with_suffix(".json")
     )
+    original = {key: value for key, value in calibration.items() if key != "calibration_id"}
+    expected = f"range-{canonical_hash(original)[:12]}"
+    if calibration.get("calibration_id") != calibration_id or expected != calibration_id:
+        raise ValueError("hardware calibration content differs from its registered identity")
+    fitted_devices = calibration.get("devices")
+    if not isinstance(fitted_devices, dict) or not fitted_devices:
+        raise ValueError("hardware calibration requires fitted devices")
+    for device, fitted in fitted_devices.items():
+        if device not in ("A", "B") or not isinstance(fitted, dict):
+            raise ValueError(f"hardware calibration has an invalid fitted device: {device!r}")
+        for field in ("offset_m", "variance_m2", "selected_q_m2_s3"):
+            value = fitted.get(field)
+            if (
+                not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not math.isfinite(value)
+            ):
+                raise ValueError(f"{device}.{field} must be finite, got {value!r}")
+        if fitted["variance_m2"] <= 0:
+            raise ValueError(
+                f"{device}.variance_m2 must be positive, got {fitted['variance_m2']!r}"
+            )
+        if fitted["selected_q_m2_s3"] not in (0.01, 0.1, 1.0):
+            raise ValueError(
+                f"{device}.selected_q_m2_s3 must be a declared candidate, got {fitted['selected_q_m2_s3']!r}"
+            )
     if calibration["source_hash"] != scientific_source_hash():
         raise ValueError("hardware scientific source changed after H1/H2 selection")
     devices = list(calibration["devices"])

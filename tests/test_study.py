@@ -3,7 +3,13 @@ import pytest
 from sensorfusion.contracts import RunConfig
 from sensorfusion.runtime import execute_run
 from sensorfusion.storage import canonical_hash, read_json, write_json
-from sensorfusion.study import admit_study_config, run_study, scientific_source_hash, verify_study
+from sensorfusion.study import (
+    _select_candidate,
+    admit_study_config,
+    run_study,
+    scientific_source_hash,
+    verify_study,
+)
 
 
 def registered_study(root):
@@ -85,50 +91,28 @@ def test_failed_matrix_preserves_every_attempt_and_null_headline(tmp_path):
     assert read_json(tmp_path / "studies" / "registered" / "study.json") == before
 
 
-def test_selection_preserves_fixed_wls_failure_and_excludes_failed_tunable_candidate(
-    tmp_path, monkeypatch
-):
-    from types import SimpleNamespace
-
-    import numpy as np
-
-    from sensorfusion.models import NumericalError
-    from sensorfusion.study import select_parameters
-
-    calibration = {
-        "dataset_id": "roboloc-g",
-        "certified_modalities": ["uwb", "ftm", "imu", "radar"],
-        "fit_sessions": ["still", "zigzag1", "zigzag2"],
-        "imu": {"acceleration_noise_density_m2_s3": 0.1},
-        "radars": {
-            "AOP": {"certified": True, "selected_clustering": {"radius_m": 0.2, "min_samples": 3}}
-        },
+@pytest.mark.parametrize("score_field", ["objective", "rmse_m"])
+def test_selection_retains_fixed_failure_and_excludes_failed_tunable_rows(score_field):
+    fixed = {
+        "config": RunConfig(method="M1").model_dump(),
+        score_field: None,
+        "failures": {"zigzag3": "NumericalError: authored failed validation result"},
     }
-    write_json(tmp_path / "calibrations" / "test.json", calibration)
-    monkeypatch.setattr(
-        "sensorfusion.data.load_session",
-        lambda workspace, dataset, session, calibration: SimpleNamespace(
-            session_id=session, observations=[], reference_times=[], reference_positions=[]
-        ),
-    )
+    assert _select_candidate([fixed], score_field, fixed_baseline=True) is fixed
+    assert fixed["failures"] == {"zigzag3": "NumericalError: authored failed validation result"}
+    failed = {"config": RunConfig(method="M2", q_cv=0.01).model_dump(), score_field: None}
+    valid = {"config": RunConfig(method="M2", q_cv=0.1).model_dump(), score_field: 1.0}
+    assert _select_candidate([failed, valid], score_field) is valid
+    assert _select_candidate([failed], score_field) is None
 
-    def fake_estimate(observations, config):
-        if config.session_id == "zigzag3" and (
-            config.method == "M1" or (config.method == "M2" and config.q_cv == 0.01)
-        ):
-            raise NumericalError("known WLS nonconvergence")
-        return SimpleNamespace(states=np.zeros((2, 6)))
 
-    monkeypatch.setattr("sensorfusion.engine.estimate", fake_estimate)
-    monkeypatch.setattr(
-        "sensorfusion.evaluation.score", lambda *args: ({"position_rmse_m": 1.0}, None, None)
-    )
-    selection = select_parameters(tmp_path, "test")
-    assert selection["status"] == "completed" and not selection["final_accessed"]
-    fixed = selection["candidates"]["M1"][0]
-    assert fixed["objective"] is None
-    assert "nonconvergence" in fixed["failures"]["zigzag3"]
-    assert selection["selection_evidence"]["M1"]["selection_basis"] == "fixed_baseline"
-    assert selection["selection_evidence"]["M1"]["validation_failed"]
-    assert selection["selected"]["M2"]["q_cv"] == 0.1
-    assert selection["candidates"]["M2"][0]["objective"] is None
+@pytest.mark.parametrize("score_field", ["objective", "rmse_m"])
+def test_selection_breaks_equal_score_ties_by_declared_process_noise(score_field):
+    configurations = [
+        RunConfig(q_cv=1.0, acceleration_noise=0.01, bias_diffusion=0),
+        RunConfig(q_cv=0.1, acceleration_noise=0.2, bias_diffusion=0),
+        RunConfig(q_cv=0.1, acceleration_noise=0.1, bias_diffusion=1e-6),
+        RunConfig(q_cv=0.1, acceleration_noise=0.1, bias_diffusion=0),
+    ]
+    candidates = [{"config": config.model_dump(), score_field: 1.0} for config in configurations]
+    assert _select_candidate(candidates, score_field) is candidates[-1]

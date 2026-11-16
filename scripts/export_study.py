@@ -48,6 +48,14 @@ def fault_unit(kind: str) -> str:
         raise ValueError(f"unknown fault kind has no declared physical unit: {kind!r}") from error
 
 
+def fault_injected(fault: dict) -> bool:
+    return (
+        fault.get("injected") is True
+        and type(fault.get("affected")) is int
+        and fault["affected"] > 0
+    )
+
+
 def fault_outcomes(times: np.ndarray, errors: np.ndarray, fault: dict) -> dict:
     """Compute episode error and a fixed, explicitly censored recovery definition."""
     if times.ndim != 1 or errors.shape != times.shape or np.any(np.diff(times) <= 0):
@@ -67,7 +75,7 @@ def fault_outcomes(times: np.ndarray, errors: np.ndarray, fault: dict) -> dict:
     }
     if fault.get("kind", "none") == "none":
         return result
-    if fault.get("injected") is not True:
+    if not fault_injected(fault):
         result["recovery_status"] = "skipped" if fault.get("skipped") else "unconfirmed_injection"
         return result
     episode_start = float(fault["start_s"])
@@ -192,7 +200,7 @@ def export_study(workspace: Path, study_id: str, destination: Path) -> Path:
         fault_execution = "unconfirmed"
         if fault.get("kind", "none") == "none":
             fault_execution = "not_applicable"
-        elif fault.get("injected") is True:
+        elif fault_injected(fault):
             fault_execution = "injected"
         elif fault.get("skipped"):
             fault_execution = "skipped"
@@ -210,7 +218,7 @@ def export_study(workspace: Path, study_id: str, destination: Path) -> Path:
             "fault_seed": fault.get("seed", 0),
             "fault_start_s": fault.get("start_s"),
             "fault_duration_s": fault.get("duration_s"),
-            "fault_injected": fault.get("injected"),
+            "fault_injected": fault_injected(fault),
             "fault_skipped": bool(fault.get("skipped", False)),
             "fault_execution": fault_execution,
             "metrics_json": json.dumps(metrics, sort_keys=True),

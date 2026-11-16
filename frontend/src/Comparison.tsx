@@ -1,7 +1,7 @@
 import type { Data } from 'plotly.js';
 import { useMemo } from 'react';
 import { useResource } from './api';
-import { Empty, formatNumber, LoadState, methodLabel, RunSelect } from './components';
+import { Empty, formatNumber, LoadState, methodLabel, RunSelect, TableScroll } from './components';
 import Plot, { plotColour } from './Plot';
 import { positionErrors } from './Replay';
 import type { Run, Trajectory } from './types';
@@ -49,6 +49,14 @@ function ComparePlot({
           },
         }}
       />
+      {(left.decimated || right.decimated) && (
+        <p className="caption">
+          Run A: {formatNumber(left.times.length)} of {formatNumber(left.total_points)} points
+          {left.decimated ? ' (decimated)' : ''}. Run B: {formatNumber(right.times.length)} of{' '}
+          {formatNumber(right.total_points)} points{right.decimated ? ' (decimated)' : ''}. Saved
+          metrics use all eligible data.
+        </p>
+      )}
     </section>
   );
 }
@@ -148,6 +156,22 @@ export default function Comparison({
       warnings.push(
         `Physical, generation or evaluation settings differ: ${changedSettings.join(', ')}. Interpret this as a comparison of multiple settings.`,
       );
+    const faultSettings = [
+      'kind',
+      'level',
+      'seed',
+      'start_s',
+      'duration_s',
+      'axis',
+      'sensor_id',
+    ] as const;
+    const changedFaults = faultSettings.filter(
+      (key) => a.config.fault[key] !== b.config.fault[key],
+    );
+    if (changedFaults.length)
+      warnings.push(
+        `Fault settings or schedules differ: ${changedFaults.join(', ')}. Interpret this as a comparison of different observation conditions.`,
+      );
     const changedData = ['source_version', 'target', 'time_origin_s'].filter(
       (key) => JSON.stringify(aSession?.[key]) !== JSON.stringify(bSession?.[key]),
     );
@@ -237,34 +261,38 @@ export default function Comparison({
                         Synthetic validation results. No real-data accuracy claim.
                       </p>
                     )}
-                    <table className="comparison-table">
-                      <thead>
-                        <tr>
-                          <th>Measured outcome</th>
-                          <th>A: {methodLabel(a.config)}</th>
-                          <th>B: {methodLabel(b.config)}</th>
-                          <th>B minus A</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {metrics.map(([label, key]) => {
-                          const av = a.metrics?.[key];
-                          const bv = b.metrics?.[key];
-                          return (
-                            <tr key={key}>
-                              <th scope="row">{label}</th>
-                              <td>{formatNumber(av)}</td>
-                              <td>{formatNumber(bv)}</td>
-                              <td>
-                                {formatNumber(
-                                  typeof av === 'number' && typeof bv === 'number' ? bv - av : null,
-                                )}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
+                    <TableScroll label="Comparison outcomes">
+                      <table className="comparison-table">
+                        <thead>
+                          <tr>
+                            <th>Measured outcome</th>
+                            <th>A: {methodLabel(a.config)}</th>
+                            <th>B: {methodLabel(b.config)}</th>
+                            <th>B minus A</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {metrics.map(([label, key]) => {
+                            const av = a.metrics?.[key];
+                            const bv = b.metrics?.[key];
+                            return (
+                              <tr key={key}>
+                                <th scope="row">{label}</th>
+                                <td>{formatNumber(av)}</td>
+                                <td>{formatNumber(bv)}</td>
+                                <td>
+                                  {formatNumber(
+                                    typeof av === 'number' && typeof bv === 'number'
+                                      ? bv - av
+                                      : null,
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </TableScroll>
                     {a.status === 'completed' && b.status === 'completed' && (
                       <LoadState resource={leftTrajectory}>
                         {(lt) => (

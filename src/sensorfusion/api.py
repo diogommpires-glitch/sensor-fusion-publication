@@ -14,7 +14,13 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from sensorfusion import __version__
 from sensorfusion.contracts import RunConfig
 from sensorfusion.runtime import BusyError, ExperimentRuns, require_certified_modalities
-from sensorfusion.storage import json_safe, read_json, registered_path, trajectory
+from sensorfusion.storage import (
+    json_safe,
+    read_json,
+    registered_path,
+    time_window_indices,
+    trajectory,
+)
 
 METHODS = [
     ("M1", "UWB geometric WLS", ["uwb"]),
@@ -217,16 +223,28 @@ def create_app(workspace: Path | str = "workspace") -> FastAPI:
         return runs.directory(run_id)
 
     @app.get("/api/runs/{run_id}/trajectory")
-    def get_trajectory(run_id: str, max_points: int = Query(2000, ge=10, le=20000)) -> dict:
-        return trajectory(completed(run_id), max_points)
+    def get_trajectory(
+        run_id: str,
+        max_points: int = Query(2000, ge=10, le=20000),
+        start_s: float | None = Query(None, allow_inf_nan=False),
+        end_s: float | None = Query(None, allow_inf_nan=False),
+    ) -> dict:
+        return trajectory(completed(run_id), max_points, start_s, end_s)
 
     @app.get("/api/runs/{run_id}/diagnostics")
-    def diagnostics(run_id: str, max_points: int = Query(2000, ge=10, le=20000)) -> dict:
+    def diagnostics(
+        run_id: str,
+        max_points: int = Query(2000, ge=10, le=20000),
+        start_s: float | None = Query(None, allow_inf_nan=False),
+        end_s: float | None = Query(None, allow_inf_nan=False),
+    ) -> dict:
         data = read_json(completed(run_id) / "innovations.json")
         count = len(data["innovations"])
-        stride = max(1, (count + max_points - 1) // max_points)
+        times = np.array([item.get("t", item.get("time")) for item in data["innovations"]])
+        eligible = time_window_indices(times, start_s, end_s)
+        stride = max(1, (len(eligible) + max_points - 1) // max_points)
         records = [
-            {**item, "t": item.get("t", item.get("time"))} for item in data["innovations"][::stride]
+            {**data["innovations"][index], "t": times[index]} for index in eligible[::stride]
         ]
         return json_safe(
             {
@@ -234,11 +252,82 @@ def create_app(workspace: Path | str = "workspace") -> FastAPI:
                 "metadata": data["metadata"],
                 "total_points": count,
                 "decimated": stride > 1,
+                "window_points": len(eligible),
+                "returned_points": len(records),
+                "window": {"start_s": start_s, "end_s": end_s},
+            }
+        )
+
+    def saved_radar_frame(directory: Path, h5, index: int, sensor: str) -> dict:
+        start, stop = h5["offsets"][index : index + 2]
+        centroid = h5["centroids"][index]
+        association_reason = None
+        with h5py.File(directory / "numerical.h5", "r") as numerical:
+            if "radar_associations" in numerical:
+                group = numerical["radar_associations"]
+                matches = np.flatnonzero(
+                    (group["sensor_ids"].asstr()[:] == sensor)
+                    & (np.abs(group["times"][:] - h5["times"][index]) < 1e-6)
+                )
+                if len(matches):
+                    centroid = group["centroids"][matches[0]]
+                    association_reason = group["reasons"].asstr()[matches[0]]
+        return {
+            "time": float(h5["times"][index]),
+            "sensor_id": sensor,
+            "points": h5["points"][start:stop],
+            "centroid": centroid,
+            "association_reason": association_reason,
+            "frame": h5["frames"].asstr()[index],
+        }
+
+    @app.get("/api/runs/{run_id}/radar-frames")
+    def radar_frames(
+        run_id: str,
+        max_frames: int = Query(50, ge=1, le=500),
+        start_s: float | None = Query(None, allow_inf_nan=False),
+        end_s: float | None = Query(None, allow_inf_nan=False),
+    ) -> dict:
+        directory = completed(run_id)
+        sensor = read_json(directory / "config.json")["radar_sensor"]
+        if (directory / "radar.h5").exists():
+            with h5py.File(directory / "radar.h5", "r") as h5:
+                selected = np.flatnonzero(h5["sensor_ids"].asstr()[:] == sensor)
+                eligible = selected[time_window_indices(h5["times"][:][selected], start_s, end_s)]
+                indices = eligible[
+                    np.linspace(
+                        0, max(0, len(eligible) - 1), min(len(eligible), max_frames), dtype=int
+                    )
+                ]
+                frames = [saved_radar_frame(directory, h5, int(index), sensor) for index in indices]
+        else:
+            saved = [
+                {**frame, "time": frame.get("time", frame.get("t"))}
+                for frame in read_json(directory / "radar.json")["frames"]
+                if frame["sensor_id"] == sensor
+            ]
+            selected = np.arange(len(saved))
+            eligible = time_window_indices(
+                np.array([frame["time"] for frame in saved]), start_s, end_s
+            )
+            indices = eligible[
+                np.linspace(0, max(0, len(eligible) - 1), min(len(eligible), max_frames), dtype=int)
+            ]
+            frames = [saved[index] for index in indices]
+        return json_safe(
+            {
+                "frames": frames,
+                "sensor_id": sensor,
+                "total_points": len(selected),
+                "window_points": len(eligible),
+                "returned_points": len(frames),
+                "decimated": len(eligible) > max_frames,
+                "window": {"start_s": start_s, "end_s": end_s},
             }
         )
 
     @app.get("/api/runs/{run_id}/radar-frame")
-    def radar_frame(run_id: str, time: float = 0.0) -> dict:
+    def radar_frame(run_id: str, time: float = Query(0.0, allow_inf_nan=False)) -> dict:
         directory = completed(run_id)
         sensor = read_json(directory / "config.json")["radar_sensor"]
         if (directory / "radar.h5").exists():
@@ -246,29 +335,8 @@ def create_app(workspace: Path | str = "workspace") -> FastAPI:
                 indices = np.flatnonzero(h5["sensor_ids"].asstr()[:] == sensor)
                 if len(indices):
                     index = int(indices[np.argmin(np.abs(h5["times"][:][indices] - time))])
-                    start, stop = h5["offsets"][index : index + 2]
-                    centroid = h5["centroids"][index]
-                    association_reason = None
-                    with h5py.File(directory / "numerical.h5", "r") as numerical:
-                        if "radar_associations" in numerical:
-                            group = numerical["radar_associations"]
-                            matches = np.flatnonzero(
-                                (group["sensor_ids"].asstr()[:] == sensor)
-                                & (np.abs(group["times"][:] - h5["times"][index]) < 1e-6)
-                            )
-                            if len(matches):
-                                centroid = group["centroids"][matches[0]]
-                                association_reason = group["reasons"].asstr()[matches[0]]
                     return json_safe(
-                        {
-                            "time": float(h5["times"][index]),
-                            "sensor_id": sensor,
-                            "points": h5["points"][start:stop],
-                            "centroid": centroid,
-                            "association_reason": association_reason,
-                            "frame": h5["frames"].asstr()[index],
-                            "requested_time": time,
-                        }
+                        {**saved_radar_frame(directory, h5, index, sensor), "requested_time": time}
                     )
         frames = [
             {**frame, "time": frame.get("time", frame.get("t"))}

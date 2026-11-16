@@ -1,6 +1,7 @@
 from dataclasses import replace
 
 import numpy as np
+import pytest
 
 from sensorfusion.contracts import FaultConfig, Observation
 from sensorfusion.faults import inject_fault
@@ -35,3 +36,28 @@ def test_episode_that_does_not_fit_is_reported_skipped():
     _, metadata = inject_fault([row], FaultConfig(kind="dropout", level=5))
     assert metadata["skipped"]
     assert not metadata["injected"]
+
+
+@pytest.mark.parametrize("kind,modality", [("range_bias", "uwb"), ("radar_shift", "radar")])
+def test_unknown_explicit_fault_sensor_is_rejected(kind, modality):
+    dimension = 1 if modality == "uwb" else 3
+    row = Observation(0, 0, modality, "known", np.ones(dimension), np.eye(dimension))
+    observations = [row, replace(row, t=9, arrival=9)]
+    with pytest.raises(ValueError, match="unknown.*sensor"):
+        inject_fault(
+            observations,
+            FaultConfig(kind=kind, level=0.5, sensor_id="absent", start_s=3, duration_s=1),
+        )
+
+
+def test_empty_fault_episode_preserves_observations_and_reports_no_injection():
+    row = Observation(0, 0, "uwb", "a", np.array([3.0]), np.eye(1), np.ones(3))
+    observations = [row, replace(row, t=9, arrival=9)]
+    unchanged, metadata = inject_fault(
+        observations,
+        FaultConfig(kind="range_bias", level=0.5, sensor_id="a", start_s=3, duration_s=1),
+    )
+    assert all(left is right for left, right in zip(unchanged, observations, strict=True))
+    assert metadata["affected"] == 0
+    assert not metadata["injected"]
+    assert metadata["reason"] == "no eligible observations in the requested episode"

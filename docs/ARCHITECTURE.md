@@ -121,8 +121,10 @@ silently overwritten or extended through another final evaluation.
 `runtime.ExperimentRuns` starts one spawned numerical worker. A workspace-wide
 `FileLock` coordinates workers across API instances and CLI commands. Admission
 uses a readiness handshake; a busy workspace returns HTTP 409. Process ID plus
-creation time identifies workers, so PID reuse does not make an orphan appear
-alive. Missing workers leave interrupted statuses on reconciliation.
+creation identity identifies workers, so PID reuse does not make an orphan
+appear alive. New Linux records use the boot ID and process-start ticks to
+avoid wall-clock adjustments; older records use their saved creation time.
+Missing workers leave interrupted statuses on reconciliation.
 
 ```mermaid
 stateDiagram-v2
@@ -190,6 +192,7 @@ authentication claim.
 | `GET /api/runs/{id}/trajectory?max_points=2000` | Decimated saved trajectory, null rows, full position covariance and confidence geometry |
 | `GET /api/runs/{id}/diagnostics?max_points=2000` | Saved innovations, including rejections, with explicit decimation metadata |
 | `GET /api/runs/{id}/radar-frame?time=0` | Nearest saved frame for the run's selected radar |
+| `GET /api/runs/{id}/radar-frames?start_s=1&end_s=2&max_frames=50` | Bounded collection for the run's selected radar, with sampling counts |
 | `GET /api/runs/{id}/artifacts`, `GET /api/runs/{id}/artifacts/{artifact_id}` | Registered manifest and hash-checked download |
 | `GET /api/studies`, `GET /api/studies/{id}` | Declared protocol, blockers and saved study record |
 
@@ -205,6 +208,15 @@ marginal covariance and two-degree-of-freedom quantile. The viewer renders those
 separate geometries. Reference gaps, unavailable estimates and saved errors retain
 their original row alignment. Metrics use the full eligible saved data, even when
 plots are decimated.
+
+Trajectory and diagnostic reads also accept optional inclusive `start_s` and
+`end_s` bounds in saved-run seconds. Bounds must be finite and ordered; an empty
+interval returns empty arrays. Responses retain `total_points` for the full
+stream and add `window_points` before sampling and `returned_points` afterwards.
+`decimated` describes sampling within that interval. Radar collections use the
+same bounds, with `max_frames` between 1 and 500; the single-frame endpoint
+continues to return the nearest frame. Reading a window does not rescore a run
+or change its saved metrics.
 
 ## Acceptance evidence
 

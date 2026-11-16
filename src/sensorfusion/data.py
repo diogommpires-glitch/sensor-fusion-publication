@@ -74,7 +74,6 @@ MILUV_ANCHORS = {
 }
 MILUV_LEVER_ARM = np.array([0.13189, -0.17245, -0.05249])
 MILUV_ALLOWLIST = ("timestamp", "from_id", "to_id", "range_raw")
-_VERIFIED_ARCHIVES: dict[tuple[str, int, int], dict[str, Any]] = {}
 
 
 class DataBlockedError(ValueError):
@@ -102,11 +101,7 @@ def _verify_sources(workspace: Path, dataset_id: str) -> list[dict[str, Any]]:
         path = _archive(workspace, dataset_id, entry["name"])
         if not path.exists():
             raise DataBlockedError(f"missing pinned source archive {path.name}")
-        stat = path.stat()
-        key = str(path.resolve()), stat.st_size, stat.st_mtime_ns
-        if key not in _VERIFIED_ARCHIVES:
-            _VERIFIED_ARCHIVES[key] = verify_archive(path, entry)
-        manifests.append({"name": entry["name"], **_VERIFIED_ARCHIVES[key]})
+        manifests.append({"name": entry["name"], **verify_archive(path, entry)})
     return manifests
 
 

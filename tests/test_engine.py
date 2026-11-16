@@ -1,8 +1,10 @@
 import numpy as np
 import pytest
 
-from sensorfusion.contracts import Observation, RunConfig
+from sensorfusion.contracts import FaultConfig, Observation, RunConfig
 from sensorfusion.engine import CancelledError, estimate
+from sensorfusion.faults import inject_fault
+from sensorfusion.models import NumericalError
 
 ANCHORS = np.array([[0, 0, 0], [4, 0, 0], [0, 4, 0], [0, 0, 4]], dtype=float)
 POSITION = np.array([1.0, 1.0, 1.0])
@@ -135,3 +137,29 @@ def test_negative_bias_corrected_range_is_not_censored():
     assert diagnostic["accepted"]
     assert diagnostic["residual"][0] < -0.5
     assert np.isfinite(result.states).all()
+
+
+def test_propagation_overflow_is_a_numerical_failure_not_missing_geometry():
+    observations = ranges(0) + [
+        Observation(0, 0, "imu", "imu", np.array([1e308, 0, 0]), np.eye(3)),
+        Observation(5, 5, "imu", "imu", np.zeros(3), np.eye(3)),
+    ]
+    with (
+        np.errstate(over="ignore", invalid="ignore"),
+        pytest.raises(NumericalError, match="predicted state.*finite"),
+    ):
+        estimate(observations, RunConfig(method="M4"))
+
+
+def test_injected_imu_fault_remains_a_valid_excluded_input_control_for_m2():
+    observations = ranges(0) + [Observation(3, 3, "imu", "imu", np.zeros(3), np.eye(3))] + ranges(9)
+    changed, fault = inject_fault(
+        observations, FaultConfig(kind="imu_bias", level=0.1, start_s=3, duration_s=1)
+    )
+    assert fault["injected"] and fault["affected"] == 1
+    config = RunConfig(method="M2")
+    original = estimate(observations, config)
+    control = estimate(changed, config)
+    np.testing.assert_array_equal(control.times, original.times)
+    np.testing.assert_array_equal(control.states, original.states)
+    np.testing.assert_array_equal(control.covariances, original.covariances)

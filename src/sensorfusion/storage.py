@@ -246,12 +246,39 @@ def artefact_manifest(directory: Path) -> list[dict]:
     return artefacts
 
 
-def trajectory(directory: Path, max_points: int = 2000) -> dict:
+def time_window_indices(
+    times: np.ndarray, start_s: float | None, end_s: float | None
+) -> np.ndarray:
+    if any(value is not None and not np.isfinite(value) for value in (start_s, end_s)):
+        raise ValueError("time bounds must be finite seconds")
+    if start_s is not None and end_s is not None and start_s > end_s:
+        raise ValueError("start_s must not exceed end_s")
+    eligible = np.ones(len(times), dtype=bool)
+    if start_s is not None:
+        eligible &= times >= start_s
+    if end_s is not None:
+        eligible &= times <= end_s
+    return np.flatnonzero(eligible)
+
+
+def trajectory(
+    directory: Path,
+    max_points: int = 2000,
+    start_s: float | None = None,
+    end_s: float | None = None,
+) -> dict:
     if not 10 <= max_points <= 20000:
         raise ValueError("max_points must be between 10 and 20000")
     with h5py.File(directory / "numerical.h5", "r") as h5:
-        count = len(h5["times"])
-        indices = np.unique(np.linspace(0, max(0, count - 1), min(count, max_points), dtype=int))
+        times = h5["times"][:]
+        count = len(times)
+        eligible = time_window_indices(times, start_s, end_s)
+        window_count = len(eligible)
+        indices = eligible[
+            np.unique(
+                np.linspace(0, max(0, window_count - 1), min(window_count, max_points), dtype=int)
+            )
+        ]
         states = h5["states"][indices]
         covariances = h5["covariances"][indices]
         position_covariances = covariances[:, :3, :3]
@@ -292,8 +319,11 @@ def trajectory(directory: Path, max_points: int = 2000) -> dict:
             "confidence_probability": 0.95,
             "position_errors": h5["position_errors"][indices],
             "anchors": [{"id": name, "position": h5["anchors"][name][:]} for name in h5["anchors"]],
-            "decimated": count > max_points,
+            "decimated": window_count > max_points,
             "total_points": count,
+            "window_points": window_count,
+            "returned_points": len(indices),
+            "window": {"start_s": start_s, "end_s": end_s},
             "frame": "world",
             "length_unit": "m",
             "time_unit": "s",

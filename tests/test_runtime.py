@@ -1,4 +1,6 @@
+import sys
 import time
+from multiprocessing.process import BaseProcess
 
 import pytest
 
@@ -9,7 +11,7 @@ from sensorfusion.runtime import (
     execute_run,
     require_certified_modalities,
 )
-from sensorfusion.storage import read_json, registered_path, trajectory
+from sensorfusion.storage import read_json, registered_path, trajectory, write_json
 
 
 def test_complete_run_has_registered_evidence_and_reproducible_reference(tmp_path):
@@ -43,6 +45,67 @@ def test_one_spawned_worker_and_cancellation(tmp_path):
             time.sleep(0.05)
         assert result["status"] == "cancelled"
         assert not (runs.directory(created["run_id"]) / "artifacts.json").exists()
+    finally:
+        runs.close()
+
+
+def test_worker_start_failure_preserves_failed_record_and_allows_retry(tmp_path, monkeypatch):
+    def unavailable(process):
+        raise OSError("worker creation unavailable")
+
+    runs = ExperimentRuns(tmp_path)
+    try:
+        with monkeypatch.context() as boundary:
+            boundary.setattr(BaseProcess, "start", unavailable)
+            with pytest.raises(OSError, match="worker creation unavailable"):
+                runs.submit(RunConfig(duration_s=5))
+        failed = runs.list()
+        assert len(failed) == 1 and failed[0]["status"] == "failed"
+        assert failed[0]["error"] == "worker creation unavailable"
+        assert not runs.cancel(failed[0]["run_id"])["requested"]
+        runs.close()
+        created = runs.submit(RunConfig(duration_s=5))
+        deadline = time.monotonic() + 20
+        result = runs.get(created["run_id"])
+        while (
+            result["status"] in ("starting", "running", "finalizing")
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.05)
+            result = runs.get(created["run_id"])
+        assert result["status"] == "completed"
+    finally:
+        runs.close()
+
+
+@pytest.mark.skipif(
+    sys.platform != "linux", reason="Linux epoch creation times track boot-time changes"
+)
+def test_live_linux_identity_survives_clock_adjustment_and_rejects_reuse(tmp_path, monkeypatch):
+    import psutil
+    from psutil import _pslinux
+
+    from sensorfusion.runtime import process_identity
+
+    process = psutil.Process()
+    identity = process_identity(process.pid)
+    status = {
+        "status": "running",
+        "owner_pid": process.pid,
+        "owner_started": process.create_time(),
+        "owner_identity": identity,
+    }
+    write_json(tmp_path / "runs/live/status.json", {**status, "run_id": "live"})
+    write_json(
+        tmp_path / "runs/reused/status.json",
+        {**status, "run_id": "reused", "owner_identity": {**identity, "start_ticks": "-1"}},
+    )
+    shifted_boot = _pslinux.boot_time() + 60
+    monkeypatch.setattr(_pslinux, "boot_time", lambda: shifted_boot)
+    runs = ExperimentRuns(tmp_path)
+    try:
+        assert runs.get("live")["status"] == "running"
+        assert runs.get("reused")["status"] == "interrupted"
     finally:
         runs.close()
 

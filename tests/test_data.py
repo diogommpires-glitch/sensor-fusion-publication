@@ -4,6 +4,7 @@ import csv
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -18,6 +19,7 @@ from sensorfusion.data import (
     _primary_ranges,
     _reference,
     _transactions,
+    _verify_sources,
     accept_radar_review,
     audit,
     fit_radar_annotations,
@@ -25,7 +27,7 @@ from sensorfusion.data import (
     read_miluv_ranges,
 )
 from sensorfusion.evaluation import align_reference
-from sensorfusion.sources import fingerprints, verify_archive
+from sensorfusion.sources import SOURCES, fingerprints, verify_archive
 
 
 def _csv(rows: list[dict[str, str]]) -> str:
@@ -211,6 +213,29 @@ def test_source_digest_rejects_corruption_without_replacing_archive(tmp_path: Pa
         verify_archive(path, entry)
     assert path.read_bytes() == b"corrupted fixture payload"
     assert fingerprints(path)["sha256"] != verified["sha256"]
+
+
+def test_source_verification_rejects_changed_bytes_with_preserved_size_and_mtime(
+    tmp_path: Path, monkeypatch
+) -> None:
+    raw = tmp_path / "data/raw/roboloc-g"
+    raw.mkdir(parents=True)
+    archive = raw / "authored.zip"
+    archive.write_bytes(b"AAAA")
+    entry = {
+        "name": archive.name,
+        "size": 4,
+        "md5": hashlib.md5(b"AAAA", usedforsecurity=False).hexdigest(),
+    }
+    monkeypatch.setitem(SOURCES, "roboloc-g", {"files": [entry]})
+    verified = _verify_sources(tmp_path, "roboloc-g")
+    assert verified[0]["sha256"] == hashlib.sha256(b"AAAA").hexdigest()
+    original_stat = archive.stat()
+    archive.write_bytes(b"BBBB")
+    os.utime(archive, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+    with pytest.raises(ValueError, match="source integrity failure"):
+        _verify_sources(tmp_path, "roboloc-g")
+    assert archive.read_bytes() == b"BBBB"
 
 
 def test_machine_radar_fit_cannot_use_check_references_to_fit_transform(tmp_path: Path) -> None:

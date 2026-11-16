@@ -143,7 +143,12 @@ export default function App() {
     revealActiveTab();
     const observer = new ResizeObserver(revealActiveTab);
     observer.observe(nav);
-    return () => observer.disconnect();
+    // A rapid wide-to-narrow resize can restore the last observed width after clamping scroll.
+    window.addEventListener('resize', revealActiveTab);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', revealActiveTab);
+    };
   }, [tab]);
   const runs = runList.data?.runs ?? [];
   const active =

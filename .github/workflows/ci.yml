@@ -70,3 +70,11 @@ jobs:
         run: |
           mkdir -p tmp
           python -m pytest --cov=sensorfusion --cov-report=term-missing --basetemp tmp/pytest-ci --ignore=tests/test_history_v2.py --ignore=tests/test_investigation.py --ignore=tests/test_research_api.py
+      - name: Install Chromium
+        if: runner.os == 'Linux'
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      # Both omitted cases require the excluded historical v1 catalogue.
+      - name: Exercise source-only browser workflows
+        if: runner.os == 'Linux'
+        run: npm --prefix frontend test -- --grep-invert 'actual research catalog preserves v1 identity and explicitly blocks unavailable physical hardware|synthetic hardware replay keeps received packets separate from verified fresh ranges'

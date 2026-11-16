@@ -29,3 +29,22 @@ def test_published_ten_hz_reference_allows_measured_clock_jitter_not_dropouts():
     aligned = align_reference(np.array([0.05, 0.15, 0.3]), times, positions)
     np.testing.assert_allclose(aligned[:2, 0], [0.05, 0.15])
     assert np.isnan(aligned[2]).all()
+
+
+def test_exact_reference_samples_survive_adjacent_gaps_without_extrapolation():
+    reference_times = np.array([0.0, 1.0, 1.05])
+    positions = np.column_stack((reference_times, np.zeros((3, 2))))
+    aligned = align_reference(
+        np.array([-0.01, 0.0, 0.5, 1.0, 1.025, 1.05, 1.06]), reference_times, positions
+    )
+    np.testing.assert_allclose(aligned[[1, 3, 5]], positions)
+    np.testing.assert_allclose(aligned[4], [1.025, 0, 0])
+    assert np.isnan(aligned[[0, 2, 6]]).all()
+
+
+def test_single_reference_point_supports_only_its_exact_epoch():
+    aligned = align_reference(
+        np.array([0.9, 1.0, 1.1]), np.array([1.0]), np.array([[2.0, 3.0, 4.0]])
+    )
+    np.testing.assert_array_equal(aligned[1], [2.0, 3.0, 4.0])
+    assert np.isnan(aligned[[0, 2]]).all()

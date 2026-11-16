@@ -1,6 +1,7 @@
 """One local numerical worker with persistent, truthful run lifecycle."""
 
 import multiprocessing as mp
+import sys
 import threading
 import time
 import traceback
@@ -42,6 +43,20 @@ REQUIRED_MODALITIES = {
 
 class BusyError(RuntimeError):
     pass
+
+
+def process_identity(pid: int) -> dict:
+    """Bind a PID to its creation without Linux wall-clock adjustments."""
+    process = psutil.Process(pid)
+    if sys.platform == "linux":
+        # /proc stat field22 counts boot-relative ticks; comm can contain spaces/parentheses.
+        fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+        return {
+            "platform": "linux",
+            "boot_id": Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
+            "start_ticks": fields[19],
+        }
+    return {"platform": sys.platform, "created_at": process.create_time()}
 
 
 def require_certified_modalities(metadata: dict, config: RunConfig) -> None:
@@ -127,6 +142,7 @@ def execute_run(
                 "message": "Preparing observations",
                 "owner_pid": psutil.Process().pid,
                 "owner_started": psutil.Process().create_time(),
+                "owner_identity": process_identity(psutil.Process().pid),
                 "config": config.model_dump(),
                 "created_at": timestamp(),
                 "metrics": None,
@@ -286,13 +302,18 @@ class ExperimentRuns:
                 continue
             pid = status.get("worker_pid", status.get("owner_pid"))
             started = status.get("worker_started", status.get("owner_started"))
+            identity = status.get("worker_identity", status.get("owner_identity"))
             alive = False
             if pid is not None and started is not None:
                 try:
-                    alive = abs(psutil.Process(pid).create_time() - started) < 0.01
-                except psutil.NoSuchProcess:
+                    alive = (
+                        process_identity(pid) == identity
+                        if identity is not None
+                        else abs(psutil.Process(pid).create_time() - started) < 0.01
+                    )
+                except (psutil.NoSuchProcess, FileNotFoundError):
                     pass
-                except psutil.AccessDenied:
+                except (psutil.AccessDenied, PermissionError):
                     continue
             if not alive:
                 _status(
@@ -343,31 +364,46 @@ class ExperimentRuns:
                 "error": None,
                 "owner_pid": psutil.Process().pid,
                 "owner_started": psutil.Process().create_time(),
+                "owner_identity": process_identity(psutil.Process().pid),
             }
             write_json(directory / "status.json", status)
-            context = mp.get_context("spawn")
-            self._cancel = context.Event()
-            admitted = context.Event()
-            ready = context.Event()
-            process = context.Process(
-                target=_worker,
-                args=(
-                    str(self.workspace),
-                    run_id,
-                    config.model_dump(),
-                    self._cancel,
-                    admitted,
-                    ready,
-                ),
-                name=f"sensorfusion-{run_id[:8]}",
-            )
+            try:
+                context = mp.get_context("spawn")
+                cancel = context.Event()
+                admitted = context.Event()
+                ready = context.Event()
+                process = context.Process(
+                    target=_worker,
+                    args=(
+                        str(self.workspace),
+                        run_id,
+                        config.model_dump(),
+                        cancel,
+                        admitted,
+                        ready,
+                    ),
+                    name=f"sensorfusion-{run_id[:8]}",
+                )
+                process.start()
+            except (OSError, RuntimeError) as error:
+                _status(
+                    directory,
+                    status="failed",
+                    message="Worker could not start",
+                    error=str(error),
+                    completed_at=timestamp(),
+                )
+                raise
+            self._cancel = cancel
             self._process = process
             self._run_id = run_id
-            process.start()
+            worker_pid = process.pid
+            assert worker_pid is not None
             _status(
                 directory,
-                worker_pid=process.pid,
-                worker_started=psutil.Process(process.pid).create_time(),
+                worker_pid=worker_pid,
+                worker_started=psutil.Process(worker_pid).create_time(),
+                worker_identity=process_identity(worker_pid),
             )
             admitted.set()
             if not ready.wait(timeout=10):

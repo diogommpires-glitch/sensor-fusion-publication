@@ -10,6 +10,7 @@ from scipy.stats import chi2
 from sensorfusion.contracts import Estimate, FloatArray, Observation, RunConfig
 from sensorfusion.models import (
     GeometryError,
+    NumericalError,
     WLSResult,
     cv_discretisation,
     inertial_discretisation,
@@ -99,6 +100,8 @@ def _predict(
     else:
         transition, process_covariance = cv_discretisation(dt, config.q_cv)
         predicted_state = transition @ state
+    if not np.isfinite(predicted_state).all():
+        raise NumericalError("predicted state must contain finite values")
     predicted_covariance = transition @ covariance @ transition.T + process_covariance
     predicted_covariance = (predicted_covariance + predicted_covariance.T) / 2
     validate_covariance(predicted_covariance)

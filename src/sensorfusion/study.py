@@ -96,6 +96,26 @@ def radar_settings(calibration: dict, radar_sensor: str) -> dict:
     }
 
 
+def _select_candidate(
+    rows: list[dict[str, Any]], score_field: str, *, fixed_baseline: bool = False
+) -> dict[str, Any] | None:
+    """Retain failed fixed baselines; exclude failed tunable rows and break score ties."""
+    eligible = [row for row in rows if row[score_field] is not None]
+    if not eligible and fixed_baseline:
+        eligible = rows
+    if not eligible:
+        return None
+    return min(
+        eligible,
+        key=lambda row: (
+            row[score_field],
+            row["config"]["q_cv"],
+            row["config"]["acceleration_noise"],
+            row["config"]["bias_diffusion"],
+        ),
+    )
+
+
 def select_parameters(workspace: Path, calibration_id: str) -> dict:
     from sensorfusion.data import load_session
     from sensorfusion.engine import estimate
@@ -181,33 +201,20 @@ def select_parameters(workspace: Path, calibration_id: str) -> dict:
                 }
             )
         candidates[method] = rows
-        eligible = [row for row in rows if row["objective"] is not None]
-        if not eligible:
-            if method != "M1":
-                write_json(
-                    workspace / "selection" / f"{calibration_id}.json",
-                    {
-                        "status": "blocked",
-                        "failed_method": method,
-                        "selected": selected,
-                        "selection_evidence": selection_evidence,
-                        "candidates": candidates,
-                        "windows": windows,
-                    },
-                )
-                raise ValueError(f"{method} has no complete validation result")
-            # M1 has no fitted process parameter. Preserve its fixed configuration and
-            # failed validation evidence so final WLS failures remain measurable.
-            eligible = rows
-        best = min(
-            eligible,
-            key=lambda row: (
-                row["objective"],
-                row["config"]["q_cv"],
-                row["config"]["acceleration_noise"],
-                row["config"]["bias_diffusion"],
-            ),
-        )
+        best = _select_candidate(rows, "objective", fixed_baseline=method == "M1")
+        if best is None:
+            write_json(
+                workspace / "selection" / f"{calibration_id}.json",
+                {
+                    "status": "blocked",
+                    "failed_method": method,
+                    "selected": selected,
+                    "selection_evidence": selection_evidence,
+                    "candidates": candidates,
+                    "windows": windows,
+                },
+            )
+            raise ValueError(f"{method} has no complete validation result")
         selected[method] = best["config"]
         selection_evidence[method] = {
             "selection_basis": "fixed_baseline" if method == "M1" else "validation_macro_rmse",
@@ -532,10 +539,9 @@ def freeze_external_study(workspace: Path, study_id: str, calibration_id: str) -
         result = estimate(session.observations, config)
         metric = score(result, session.reference_times, session.reference_positions)[0]
         candidates.append({"config": config.model_dump(), "rmse_m": metric["position_rmse_m"]})
-    eligible = [row for row in candidates if row["rmse_m"] is not None]
-    if not eligible:
+    best = _select_candidate(candidates, "rmse_m")
+    if best is None:
         raise ValueError("external development filtering has no scoreable estimates")
-    best = min(eligible, key=lambda row: (row["rmse_m"], row["config"]["q_cv"]))
     protocol = {
         "schema_version": 1,
         "dataset_id": "miluv",

@@ -10,6 +10,12 @@ calibrations, annotations, saved results, execution logs and the archived v1
 wheel. It makes no new empirical-performance claim. Synthetic fixtures do not
 establish real-data or physical-hardware validation.
 
+The current implementation verifies archive bytes and calibration identities,
+keeps failed worker starts recoverable, and distinguishes ineffective fault
+injections from applied ones. Comparison views disclose fault differences and
+rendering decimation. Saved trajectory, diagnostic and radar reads support
+bounded time windows without changing stored metrics.
+
 ## Scientific contracts
 
 The estimator receives observations and configuration, never evaluation reference
@@ -51,13 +57,22 @@ labelled synthetic inputs in temporary directories; they do not download data.
 .venv/Scripts/python.exe -m mypy src tests
 npm --prefix frontend run typecheck
 npm --prefix frontend run lint
+.venv/Scripts/python.exe scripts/build_frontend.py
+# Installs the test browser once into the user browser cache.
+npm --prefix frontend exec -- playwright install chromium
+npm --prefix frontend test -- --grep-invert 'actual research catalog preserves v1 identity and explicitly blocks unavailable physical hardware|synthetic hardware replay keeps received packets separate from verified fresh ranges'
 ```
 
 Historical-runtime, investigation-registration and research-catalogue tests require
 excluded archived material. Those three test modules remain in source and are
 excluded from this snapshot's CI selection. The rest of the
 suite retains estimator, isolation, integrity, storage, synthetic acquisition and
-API contracts. See the workflow for the precise publication CI selection.
+API contracts. The source-only browser selection contains 15 workflows, including
+the comparison, keyboard navigation and mobile presentation checks. Two browser
+cases, named exactly in the command above, require the excluded historical v1
+catalogue. Their tests remain intact. The research screen reports that missing
+archive rather than substituting a current runtime or synthetic history. See the
+workflow for the precise publication CI selection.
 
 ## Methods and provenance
 

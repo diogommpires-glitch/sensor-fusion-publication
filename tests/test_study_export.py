@@ -18,7 +18,7 @@ def test_recovery_requires_a_complete_second_and_preserves_censoring():
     errors = np.ones(len(times))
     errors[(times >= 2) & (times < 3)] = 4
     errors[np.isclose(times, 3.5)] = np.nan
-    fault = {"kind": "dropout", "injected": True, "start_s": 2, "duration_s": 1}
+    fault = {"kind": "dropout", "injected": True, "affected": 20, "start_s": 2, "duration_s": 1}
     outcome = fault_outcomes(times, errors, fault)
     assert outcome["outage_rmse_m"] == 4
     assert outcome["recovery_threshold_m"] == 1
@@ -180,6 +180,7 @@ def test_external_principal_figure_uses_the_registered_m2_m1_comparison(tmp_path
     [
         ({"kind": "range_bias", "injected": False, "skipped": True}, "skipped", 1, 0),
         ({"kind": "range_bias"}, "unconfirmed", 0, 1),
+        ({"kind": "range_bias", "injected": True, "affected": 0}, "unconfirmed", 0, 1),
     ],
 )
 def test_skipped_or_unconfirmed_fault_preserves_condition_without_a_delta(

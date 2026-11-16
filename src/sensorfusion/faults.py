@@ -16,6 +16,16 @@ def inject_fault(
         raise ValueError("cannot inject a fault into an empty observation stream")
     if config.level <= 0:
         raise ValueError(f"fault level must be positive, got {config.level}")
+    target_modality = {"range_bias": "uwb", "radar_shift": "radar"}.get(config.kind)
+    if (
+        config.sensor_id is not None
+        and target_modality is not None
+        and not any(
+            row.modality == target_modality and row.sensor_id == config.sensor_id
+            for row in observations
+        )
+    ):
+        raise ValueError(f"unknown {target_modality} fault sensor {config.sensor_id!r}")
     first = min(o.arrival for o in observations)
     last = max(o.arrival for o in observations)
     duration = config.level if config.kind == "dropout" else config.duration_s
@@ -72,9 +82,9 @@ def inject_fault(
             continue
         altered.append(replace(observation, value=value))
         affected += 1
-    return sorted(altered, key=lambda o: (o.arrival, o.t)), {
+    metadata = {
         "kind": config.kind,
-        "injected": True,
+        "injected": affected > 0,
         "start_s": start,
         "duration_s": duration,
         "level": config.level,
@@ -84,3 +94,6 @@ def inject_fault(
         "affected": affected,
         "notice": "Injected observation fault, not measured NLOS or RF behaviour.",
     }
+    if affected == 0:
+        metadata["reason"] = "no eligible observations in the requested episode"
+    return sorted(altered, key=lambda o: (o.arrival, o.t)), metadata

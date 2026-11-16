@@ -15,14 +15,22 @@ def align_reference(
     max_gap_s: float = REFERENCE_MAX_GAP_S,
 ) -> np.ndarray:
     aligned = np.full((len(times), 3), np.nan)
-    if len(reference_times) < 2:
+    if len(reference_times) == 0:
         return aligned
     if np.any(np.diff(reference_times) <= 0):
         raise ValueError("reference timestamps must be strictly increasing")
+    exact_indices = np.searchsorted(reference_times, times, side="left")
+    exact = (exact_indices < len(reference_times)) & (
+        reference_times[np.minimum(exact_indices, len(reference_times) - 1)] == times
+    )
+    aligned[exact] = reference_positions[exact_indices[exact]]
+    if len(reference_times) < 2:
+        return aligned
     indices = np.searchsorted(reference_times, times, side="right")
     indices = np.clip(indices, 1, len(reference_times) - 1)
     valid = (
-        (times >= reference_times[0])
+        ~exact
+        & (times >= reference_times[0])
         & (times <= reference_times[-1])
         & ((reference_times[indices] - reference_times[indices - 1]) <= max_gap_s)
     )

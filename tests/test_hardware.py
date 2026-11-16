@@ -18,6 +18,8 @@ from sensorfusion.hardware import (
     register_capability,
     trial_schedule,
 )
+from sensorfusion.storage import canonical_hash
+from sensorfusion.study import scientific_source_hash
 
 
 def capability(workspace, *, freshness="sequence", verified=True):
@@ -275,6 +277,15 @@ def test_complete_fixture_protocol_freezes_before_h3_and_keeps_physical_status_p
     calibration = calibrate_hardware(tmp_path)
     assert calibration["synthetic"] and calibration["final_accessed"] is False
     assert calibration["devices"]["A"]["offset_m"] == pytest.approx(0.1, abs=0.001)
+    calibration_path = tmp_path / "hardware/calibrations" / f"{calibration['calibration_id']}.json"
+    original_calibration_bytes = calibration_path.read_bytes()
+    changed_calibration = json.loads(original_calibration_bytes)
+    changed_calibration["devices"]["A"]["offset_m"] += 10
+    calibration_path.write_text(json.dumps(changed_calibration))
+    with pytest.raises(ValueError, match="registered identity"):
+        freeze_hardware(tmp_path, "altered-calibration", calibration["calibration_id"])
+    assert not (tmp_path / "hardware/studies/altered-calibration").exists()
+    calibration_path.write_bytes(original_calibration_bytes)
     study = freeze_hardware(tmp_path, "fixture-study", calibration["calibration_id"])
     with pytest.raises(FileExistsError):
         freeze_hardware(tmp_path, "fixture-study", calibration["calibration_id"])
@@ -324,4 +335,32 @@ def test_missing_measured_reference_blocks_calibration_without_reading_h3(tmp_pa
     )["reference_ready"]
     with pytest.raises(ValueError):
         calibrate_hardware(tmp_path)
+    assert not (tmp_path / "hardware/studies").exists()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("offset_m", float("nan")),
+        ("variance_m2", 0),
+        ("variance_m2", -1),
+        ("selected_q_m2_s3", float("inf")),
+        ("selected_q_m2_s3", 0.2),
+    ],
+)
+def test_hardware_freeze_rejects_invalid_fitted_numbers_before_creating_study(
+    tmp_path, field, value
+):
+    calibration: dict = {
+        "source_hash": scientific_source_hash(),
+        "devices": {"A": {"offset_m": 0.1, "variance_m2": 0.01, "selected_q_m2_s3": 0.1}},
+    }
+    calibration["devices"]["A"][field] = value
+    calibration_id = f"range-{canonical_hash(calibration)[:12]}"
+    calibration["calibration_id"] = calibration_id
+    directory = tmp_path / "hardware/calibrations"
+    directory.mkdir(parents=True)
+    (directory / f"{calibration_id}.json").write_text(json.dumps(calibration))
+    with pytest.raises(ValueError, match=field):
+        freeze_hardware(tmp_path, "invalid-calibration", calibration_id)
     assert not (tmp_path / "hardware/studies").exists()
