@@ -8,9 +8,11 @@ import platform
 import re
 import shutil
 import subprocess
+import time
 from datetime import UTC, datetime
 from importlib.metadata import version
 from pathlib import Path, PurePosixPath
+from tempfile import NamedTemporaryFile
 from typing import Any
 
 import h5py
@@ -46,14 +48,57 @@ def canonical_hash(value: Any) -> str:
 
 
 def write_json(path: Path, value: Any) -> None:
+    payload = json.dumps(json_safe(value), indent=2, allow_nan=False)
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
-    temp.write_text(json.dumps(json_safe(value), indent=2, allow_nan=False), encoding="utf-8")
-    os.replace(temp, path)
+    temp = None
+    try:
+        with NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as output:
+            temp = Path(output.name)
+            output.write(payload)
+        deadline = time.monotonic() + 2
+        while True:
+            try:
+                os.replace(temp, path)
+                break
+            except PermissionError as error:
+                # Windows readers can briefly deny the delete access required for replacement.
+                if (
+                    os.name != "nt"
+                    or getattr(error, "winerror", None) not in (5, 32)
+                    or time.monotonic() >= deadline
+                ):
+                    raise
+                time.sleep(0.01)
+        temp = None
+    finally:
+        if temp is not None:
+            temp.unlink(missing_ok=True)
 
 
 def read_json(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
+    deadline = time.monotonic() + 2
+    while True:
+        try:
+            payload = path.read_text(encoding="utf-8")
+            break
+        except PermissionError as error:
+            # The Windows CRT reports replacement-sharing conflicts without a winerror.
+            if (
+                os.name != "nt"
+                or error.errno != errno.EACCES
+                or getattr(error, "winerror", None) is not None
+                or time.monotonic() >= deadline
+            ):
+                raise
+            time.sleep(0.01)
+    return json.loads(payload)
 
 
 def registered_path(root: Path, identifier: str) -> Path:
